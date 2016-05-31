@@ -28,8 +28,7 @@ class Context(Enum):
 
 
 class Entity():
-    def __init__(self, x, y):
-        # self._x, self._y = x, y
+    def __init__(self):
         self.context = None
         self.moveable = False
         self.is_moved = False
@@ -41,13 +40,15 @@ class Entity():
 
     @property
     def x(self):
-        # return self._x
-        self.context[Context.X]
+        return self.context[Context.X]
 
     @property
     def y(self):
-        # return self._y
-        self.context[Context.Y]
+        return self.context[Context.Y]
+
+    @property
+    def world(self):
+        return self.context[Context.WORLD]
 
     @x.setter
     def x(self, x):
@@ -59,27 +60,27 @@ class Entity():
 
 
 class Floor(Entity):
-    def __init__(self, x, y):
-        super().__init__(x, y)
+    def __init__(self):
+        super().__init__()
         self.ch = '#'
         self.color_pair = curses.color_pair(BACKGROUND_PAIR)
 
 
 class Item(Entity):
-    def __init__(self, x, y):
-        super().__init__(x, y)
+    def __init__(self):
+        super().__init__()
         self.moveable = True
 
 
 class TestItem(Item):
-    def __init__(self, x, y):
-        super().__init__(x, y)
+    def __init__(self):
+        super().__init__()
         self.ch = '$'
 
 
 class Transport(Item):
-    def __init__(self, x, y, angle=RIGHT):
-        super().__init__(x, y)
+    def __init__(self, angle=RIGHT):
+        super().__init__()
         self.angle = angle
         self.rotate(angle)
         self.color_pair = curses.color_pair(TRANSPORT_PAIR)
@@ -109,8 +110,8 @@ class Transport(Item):
 
 
 class Player(Entity):
-    def __init__(self, x, y):
-        super().__init__(x, y)
+    def __init__(self):
+        super().__init__()
         self.ch = '@'
         self.color_pair = curses.color_pair(PLAYER_PAIR)
 
@@ -129,7 +130,8 @@ def fill(scr, color):
 class World():
     def __init__(self, w, h):
         self.w, self.h = w, h
-        self._w = [[[Floor(x, y)] for x in range(w)] for y in range(h)]
+        self._w = [[[Floor()] for x in range(w)] for y in range(h)]
+        # There's no context on floor, that's bad, maybe fix it?
 
     def __getitem__(self, key):
         return self._w[key]
@@ -139,17 +141,13 @@ class World():
         entity.context = context
 
     def add(self, entity, x, y, under=None):
-        # entity.world = self
-        self.add_context_to(entity, x, y)
+        self.add_context_to(x, y, entity)
         if under:
             tile = self[under.x][under.y]
             tile.insert(tile.index(under), entity)
-        # elif entity is not None:
         else:
             tile = self[x][y]
             tile.append(entity)
-        # else:
-        #     raise ValueError("Must be defined 'entity' or 'under' argument")
         return self
 
     def draw(self, scr):
@@ -162,13 +160,13 @@ class World():
         scr.refresh()
 
     def delete_entity(self, ent, x, y):
-        tile = self[ent.x][ent.y]
+        tile = self[x][y]
         tile.pop(tile.index(ent))
 
     def _move_abs(self, entity, x, y):
-        self.delete_entity(entity, x, y)
+        self.delete_entity(entity, entity.x, entity.y)
         self[x][y].append(entity)
-        entity.x, entity.y = x, y
+        self.add_context_to(x, y, entity)
 
     def _move_rel(self, entity, dx, dy):
         self._move_abs(entity, x=entity.x + dx, y=entity.y + dy)
@@ -238,7 +236,7 @@ def handle_input(scr, world, player):
     if key in 'hjkl':
         world.move_player(player, key)
     elif key == 'q':
-        world.add(TestItem(player.x, player.y), under=player)
+        world.add(TestItem(), player.x, player.y, under=player)
     elif key == 'd':
         player.get_upper()
     elif key == 'w':
@@ -248,7 +246,7 @@ def handle_input(scr, world, player):
                      'j': DOWN,
                      'k': UP,
                      'l': RIGHT}[key_2]
-            world.add(Transport(player.x, player.y, angle=angle), under=player)
+            world.add(Transport(angle=angle), player.x, player.y, under=player)
             world.move_player(player, key_2)
 
 
@@ -258,7 +256,7 @@ def main(stdscr):
     curses.halfdelay(5)
 
     world = World(15, 10)
-    player = Player(5, 5)
+    player = Player()
     world.add(player, 5, 5)
     while True:
         world.act()
