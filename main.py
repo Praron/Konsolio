@@ -14,6 +14,8 @@ BACKGROUND_PAIR = 0
 PLAYER_PAIR = 1
 ERROR_PAIR = 2
 TRANSPORT_PAIR = 3
+ROBOHAND_PAIR = 4
+PISTON_PAIR = 5
 
 UP = 0
 RIGHT = 90
@@ -25,6 +27,11 @@ class Context(Enum):
     WORLD = 1
     X = 2
     Y = 3
+    SCR = 4
+
+
+def get_ch(scr, x, y):
+    return chr(scr.inch(y, x) & 0xFF)
 
 
 class Entity():
@@ -32,11 +39,16 @@ class Entity():
         self.context = None
         self.moveable = False
         self.is_moved = False
+        self.solid = False
         self.ch = '?'
         self.color_pair = curses.color_pair(ERROR_PAIR)
 
     def act(self):
         pass
+
+    def draw(self, scr):
+        if get_ch(scr, self.x, self.y) == ' ':
+            scr.addch(self.y, self.x, self.ch, self.color_pair)
 
     @property
     def x(self):
@@ -50,19 +62,15 @@ class Entity():
     def world(self):
         return self.context[Context.WORLD]
 
-    @x.setter
-    def x(self, x):
-        self._x = x
-
-    @y.setter
-    def y(self, y):
-        self._y = y
+    @property
+    def scr(self):
+        return self.context[Context.SCR]
 
 
 class Floor(Entity):
     def __init__(self):
         super().__init__()
-        self.ch = '#'
+        self.ch = '.'
         self.color_pair = curses.color_pair(BACKGROUND_PAIR)
 
 
@@ -79,21 +87,21 @@ class TestItem(Item):
 
 
 class Transport(Item):
-    def __init__(self, angle=RIGHT):
+    def __init__(self, angle=UP):
         super().__init__()
         self.angle = angle
         self.rotate(angle)
         self.color_pair = curses.color_pair(TRANSPORT_PAIR)
 
-    def rotate(self, angle=None):
-        if angle is None:
-            self.angle += 90
-        else:
-            self.anlge = angle
+    def _upd_ch(self):
         self.ch = {UP: '^',
                    RIGHT: '>',
                    DOWN: 'v',
                    LEFT: '<'}[self.angle]
+
+    def rotate(self, angle=None):
+        self.angle = self.angle + 90 if angle is None else angle
+        self._upd_ch()
 
     def get_offset(self):
         return {UP: (0, -1),
@@ -109,16 +117,116 @@ class Transport(Item):
                 entity.is_moved = True
 
 
+class Piston(Item):
+
+    class MovingPart(Item):
+        def __init__(self, parent):
+            super().__init__()
+            self.moved_on = 0
+            self.solid = parent.solid
+            self.angle = parent.angle
+            self.parent = parent
+            self.color_pair = parent.color_pair
+            self.ch = {UP: curses.ACS_TTEE,
+                       RIGHT: curses.ACS_RTEE,
+                       DOWN: curses.ACS_BTEE,
+                       LEFT: curses.ACS_LTEE}[self.angle]
+
+        def act(self):
+            dx, dy = {UP: (0, -1),
+                      DOWN: (0, 1),
+                      RIGHT: (1, 0),
+                      LEFT: (-1, 0)}[self.angle]
+            tile = self.world[self.x + dx][self.y + dy]
+            if (self.world.turns - self.moved_on == 1):
+                dx = self.parent.x - self.x
+                dy = self.parent.y - self.y
+                self.world.move(self, dx=dx // 2, dy=dy // 2)
+
+            elif len(tile) >= 2 and self.world.turns - self.moved_on > 1:
+                items = tile[1:]
+                self.moved_on = self.world.turns
+                for i in items:
+                    self.world.move(i, dx=dx, dy=dy)
+                    self.world.move(self, dx=dx, dy=dy)
+
+    def __init__(self, angle=UP):
+        super().__init__()
+        self.solid = True
+        self.color_pair = curses.color_pair(PISTON_PAIR)
+        self.angle = angle
+        self.ch = {UP: 'L',
+                   RIGHT: '[',
+                   DOWN: curses.ACS_PI,
+                   LEFT: ']'}[self.angle]
+        self.have_part = False
+        self.part = Piston.MovingPart(self)
+
+    def init_part(self):
+        dx, dy = {UP: (0, -1),
+                  DOWN: (0, 1),
+                  RIGHT: (1, 0),
+                  LEFT: (-1, 0)}[self.angle]
+        self.world.add(self.part, self.x + dx, self.y + dy)
+
+    def act(self):
+        if not self.have_part:
+            self.init_part()
+            self.have_part = True
+        self.part.act()
+
+
+class Robohand(Item):
+
+    class Hand(Item):
+        def __init__(self, parent, angle=UP):
+            super().__init__()
+            self.parent = parent
+            self.color_pair = curses.color_pair(ROBOHAND_PAIR)
+            self.angle = angle
+            self.ch = {UP: 'v',
+                       RIGHT: '<',
+                       DOWN: '^',
+                       LEFT: '>'}[self.angle]
+            self.solid = True
+
+    def __init__(self, angle=UP):
+        super().__init__()
+        self.color_pair = curses.color_pair(ROBOHAND_PAIR)
+        self.angle = angle
+        self.ch = '%'
+        self.solid = True
+        self.hand = Robohand.Hand(self, angle=angle)
+        self.have_hand = False
+
+    def get_offset(self):
+        return {UP: (0, -2),
+                RIGHT: (2, 0),
+                DOWN: (0, 2),
+                LEFT: (-2, 0)}[self.angle]
+
+    def init_hand(self):
+            dx, dy = {UP: (0, -1),
+                      DOWN: (0, 1),
+                      RIGHT: (1, 0),
+                      LEFT: (-1, 0)}[self.angle]
+            self.world.add(self.hand, self.x + dx, self.y + dy)
+
+    def act(self):
+        if not self.have_hand:
+            self.init_hand()
+            self.have_hand = True
+
+
 class Player(Entity):
     def __init__(self):
         super().__init__()
         self.ch = '@'
         self.color_pair = curses.color_pair(PLAYER_PAIR)
 
-    def get_upper(self):
+    def get_item(self):
         if type(self.world.get_under(self)) != Floor:
-            self.world.delete_entity(self.world.get_under(self),
-                                     self.x, self.y)
+            self.world.delete_entity(self.world.get_under(self))
 
 
 def fill(scr, color):
@@ -128,43 +236,49 @@ def fill(scr, color):
 
 
 class World():
-    def __init__(self, w, h):
-        self.w, self.h = w, h
-        self._w = [[[Floor()] for x in range(w)] for y in range(h)]
-        # There's no context on floor, that's bad, maybe fix it?
+    def __init__(self, scr, w, h):
+        self.scr, self.w, self.h = scr, w, h
+        self.turns = 0
+        self._w = [[[Floor()] for y in range(h)] for x in range(w)]
+        for y in range(h):  # Bad code!
+            for x in range(w):
+                self.add_context_to(x, y, self[x][y][0])
 
     def __getitem__(self, key):
         return self._w[key]
 
     def add_context_to(self, x, y, entity):
-        context = {Context.WORLD: self, Context.X: x, Context.Y: y}
+        context = {Context.WORLD: self, Context.X: x, Context.Y: y,
+                   Context.SCR: self.scr}
         entity.context = context
 
-    def add(self, entity, x, y, under=None):
-        self.add_context_to(x, y, entity)
+    # Use or coordinates, or upper object
+    def add(self, entity, x=None, y=None, under=None):
         if under:
             tile = self[under.x][under.y]
             tile.insert(tile.index(under), entity)
-        else:
+            self.add_context_to(under.x, under.y, entity)
+        elif type(x) == type(y) == int:
             tile = self[x][y]
             tile.append(entity)
+            self.add_context_to(x, y, entity)
+        else:
+            raise ValueError("World.add(): must define 'x' and 'y' or 'under'")
         return self
 
     def draw(self, scr):
         scr.clear()
         for y in range(self.h):
             for x in range(self.h):
-                ent = self[x][y][-1]
-                scr.insch(y, x, ent.ch, ent.color_pair)
-
+                self[x][y][-1].draw(scr)
         scr.refresh()
 
-    def delete_entity(self, ent, x, y):
-        tile = self[x][y]
+    def delete_entity(self, ent):
+        tile = self[ent.x][ent.y]
         tile.pop(tile.index(ent))
 
     def _move_abs(self, entity, x, y):
-        self.delete_entity(entity, entity.x, entity.y)
+        self.delete_entity(entity)
         self[x][y].append(entity)
         self.add_context_to(x, y, entity)
 
@@ -177,10 +291,14 @@ class World():
         else:
             self._move_rel(entity, dx, dy)
 
+    def tile_free(self, x, y):
+        return all([not e.solid for e in self[x][y]])
+
     def move_player(self, player, key):
         dx = -1 if key == 'h' else 1 if key == 'l' else 0
         dy = -1 if key == 'k' else 1 if key == 'j' else 0
-        self.move(player, dx=dx, dy=dy)
+        if self.tile_free(player.x + dx, player.y + dy):
+            self.move(player, dx=dx, dy=dy)
 
     def get_under_all(self, entity):
         tile = self[entity.x][entity.y]
@@ -194,7 +312,7 @@ class World():
         return tile[1 + tile.index(entity):]
 
     def get_above(self, entity):
-        return self.get_above_all(entity)[-1]
+        return self.get_above_all(entity)[0]
 
     def get_tiles(self):
         return [tile for sublist in self._w for tile in sublist]
@@ -202,26 +320,30 @@ class World():
     def get_entities(self):
         return [ent for tile in self.get_tiles() for ent in tile]
 
-    def free_moveable(self):
+    def free_all_moveable(self):
         for entity in self.get_entities():
             entity.is_moved = False
 
     def act(self):
+        self.turns += 1
         for entity in self.get_entities():
             entity.act()
-        self.free_moveable()
+        self.free_all_moveable()
 
 
 def init_pairs():
     curses.init_pair(PLAYER_PAIR, YELLOW, BLUE)
     curses.init_pair(ERROR_PAIR, YELLOW, RED)
     curses.init_pair(TRANSPORT_PAIR, BLUE, CYAN)
+    curses.init_pair(ROBOHAND_PAIR, RED, GREEN)
+    curses.init_pair(PISTON_PAIR, YELLOW, GREEN)
 
 
 def init_scr(scr):
     scr.clear()
     curses.curs_set(False)
     init_pairs()
+    curses.halfdelay(5)
 
 
 def get_key(scr):
@@ -236,9 +358,9 @@ def handle_input(scr, world, player):
     if key in 'hjkl':
         world.move_player(player, key)
     elif key == 'q':
-        world.add(TestItem(), player.x, player.y, under=player)
+        world.add(TestItem(), under=player)
     elif key == 'd':
-        player.get_upper()
+        player.get_item()
     elif key == 'w':
         key_2 = get_key(scr)
         if key_2 in 'hjkl':
@@ -246,21 +368,43 @@ def handle_input(scr, world, player):
                      'j': DOWN,
                      'k': UP,
                      'l': RIGHT}[key_2]
-            world.add(Transport(angle=angle), player.x, player.y, under=player)
+            world.add(Transport(angle=angle), under=player)
             world.move_player(player, key_2)
+    elif key == 'e':
+        key_2 = get_key(scr)
+        if key_2 in 'hjkl':
+            angle = {'h': LEFT,
+                     'j': DOWN,
+                     'k': UP,
+                     'l': RIGHT}[key_2]
+            world.add(Robohand(angle=angle), under=player)
+            if key_2 == 'h': world.move_player(player, 'l')
+            if key_2 == 'j': world.move_player(player, 'k')
+            if key_2 == 'k': world.move_player(player, 'j')
+            if key_2 == 'l': world.move_player(player, 'h')
+    elif key == 'r':
+        key_2 = get_key(scr)
+        if key_2 in 'hjkl':
+            angle = {'h': LEFT,
+                     'j': DOWN,
+                     'k': UP,
+                     'l': RIGHT}[key_2]
+            world.add(Piston(angle=angle), under=player)
+            if key_2 == 'h': world.move_player(player, 'l')
+            if key_2 == 'j': world.move_player(player, 'k')
+            if key_2 == 'k': world.move_player(player, 'j')
+            if key_2 == 'l': world.move_player(player, 'h')
 
 
 def main(stdscr):
-
     init_scr(stdscr)
-    curses.halfdelay(5)
 
-    world = World(15, 10)
+    world = World(stdscr, 15, 10)
     player = Player()
     world.add(player, 5, 5)
     while True:
-        world.act()
         world.draw(stdscr)
+        world.act()
         handle_input(stdscr, world, player)
 
 
